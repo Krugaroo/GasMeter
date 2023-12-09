@@ -26,12 +26,15 @@
 
 #define LED_ON_TIME (250) // ms
 #define SAVE_EEPROM_TIME (6 * 60 * 60 * 1000) // ms
-#define MAX_RECONNECT_TIME (10 * 60 * 1000) // ms 
+#define MAX_RECONNECT_TIME (10 * 60 * 1000) // ms
+#define POST_RETRY_TIME (5 * 60) // s 
 
 #define TIME_OFFSET 3600
-
 #define TIME_NTP_SERVER "nl.pool.ntp.org"
 #define TIME_TZ "CET-1CEST,M3.5.0/02,M10.5.0/03"
+
+#define MINDERGAS_SERVER "http://www.mindergas.nl/api/meter_readings"
+#define MINDERGAS_AUTH_TOKEN ""
 
 // Replace with your network credentials (STATION)
 const char* ssid = "";
@@ -51,6 +54,7 @@ uint32_t wifi_reconnect_interval = 1000;
 uint32_t led_on_time = 0;
 uint32_t save_time = 0;
 
+uint32_t post_retry_time = POST_RETRY_TIME;
 bool posted_today = false;
 time_t time_now = 0;
 time_t time_last = 0;
@@ -156,41 +160,56 @@ void reconnect_to_wifi() {
 }
 
 void post_gas_usage() {
-  tm tm;
+  tm tm, tm_last;
   char post_body[100] = {0}; 
   
   localtime_r(&time_now, &tm);
+  localtime_r(&time_last, &tm_last);
 
-  if ((posted_today == false) && (tm.tm_hour == 13) && true) {
+  if(tm.tm_hour != tm_last.tm_hour) {
+    // Time changed print it out
+    char time[100] = {0};
+    snprintf(time, 99, "Time: %04d-%02d-%02d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    Serial.println(time);
+  }
+
+  if ((posted_today == false) && (tm.tm_hour == 2) && (tm.tm_year > 100)) {
     // Try to post at 1 am
-    snprintf(post_body, 99, "{\"date\": \"%04d-%02d-%02d\", \"reading\": %f }", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, gas_m3);
-    Serial.println("Sending HTTP Post Request");
-    Serial.println(post_body);
+    if (post_retry_time >= POST_RETRY_TIME) {
+      post_retry_time = 0;
 
-    WiFiClient client;
-    HTTPClient http;
-    
-    // Domain name with URL path or IP address with path
-   // http.begin(client, serverName);
-    http.addHeader("AUTH-TOKEN", "XXXX");
-    http.addHeader("Content-Type", "application/json");
-    String httpRequestData = "api_key=tPmAT5Ab3j7F9";           
-    
-    // Send HTTP POST request
-    //int httpResponseCode = http.POST(post_body);
-     
-    Serial.println("HTTP Response code: ");
-    //Serial.println(httpResponseCode);
+      snprintf(post_body, 99, "{\"date\": \"%04d-%02d-%02d\", \"reading\": %f}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, gas_m3);
+      Serial.println("Sending HTTP Post Request");
+      Serial.println(post_body);
 
-    // If post successful set posted to true
-    posted_today = true;
-        
-    // Free resources
-    http.end();
-  
+      WiFiClient client;
+      HTTPClient http;
+      
+      // Domain name with URL path or IP address with path
+      http.begin(client, MINDERGAS_SERVER);
+      http.addHeader("Content-Type", "application/json"); 
+      http.addHeader("AUTH-TOKEN", MINDERGAS_AUTH_TOKEN);          
+      
+      // Send HTTP POST request
+      int httpResponseCode = http.POST(post_body);
+      
+      Serial.println("HTTP Response code: ");
+      Serial.println(httpResponseCode);
+
+      // If post successful set posted to true
+      if (httpResponseCode == 200) {
+        posted_today = true;
+      }
+          
+      // Free resources
+      http.end();
+    } else {
+      post_retry_time++;
+    }  
   } else if (tm.tm_hour == 3) {
     // Reset it at 3 am
     posted_today = false;
+    post_retry_time = POST_RETRY_TIME;
   }
 }
 
@@ -263,10 +282,10 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     time(&time_now);
     if (time_now != time_last) {
-      time_last = time_now;
-
       // Check when to post
       post_gas_usage();
+
+      time_last = time_now;
     }
   }
 
