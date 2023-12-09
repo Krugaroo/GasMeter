@@ -19,10 +19,10 @@
 #define IMPULSE_SENSOR_ACTIVE_EDGE LOW
 
 #define EEPROM_GAS_ADDRESS_START 0 // memory to save the gas usage 
-#define EEPROM_GAS_INITIAL_VALUE 26704.04f // Starting Value m3
+#define EEPROM_GAS_INITIAL_VALUE 26704.35f // Starting Value m3
 
 #define EEPROM_RESET_ADDRESS_START 16 // memory to save the reset trigger 
-#define EEPROM_RESET_VALUE 5 // Change this to force a save and reset of the value, it will check what is stored 
+#define EEPROM_RESET_VALUE 6 // Change this to force a save and reset of the value, it will check what is stored 
 
 #define LED_ON_TIME (250) // ms
 #define SAVE_EEPROM_TIME (6 * 60 * 60 * 1000) // ms
@@ -44,6 +44,7 @@ float gas_m3 = 0.000f;
 uint32_t reset_value = 0;
 bool gas_changed = false;
 
+uint8_t last_pin_state = IMPULSE_SENSOR_ACTIVE_EDGE;
 uint32_t time_impulse = 0;
 uint32_t time_idle = 0;
 bool allow_to_trigger = true;
@@ -90,16 +91,14 @@ void load_gas_usage() {
 }
 
 void check_gas_impulse() {
-    uint8_t current_pin_state = digitalRead(IMPULSE_SENSOR_PIN);
+  uint8_t current_pin_state = digitalRead(IMPULSE_SENSOR_PIN);
 
   if (current_pin_state == IMPULSE_SENSOR_ACTIVE_EDGE) {
-    time_idle = 0;
 
     // Check whether there is a gas Impulse Trigger
     if (allow_to_trigger == true) {
-      time_impulse++;
 
-      if (time_impulse > IMPULSE_DEBOUNCE) {
+      if (millis() - time_impulse > IMPULSE_DEBOUNCE) {
         // Impulse seen for the debounce time
 
         gas_m3 += IMPULSE_RESOLUTION;
@@ -116,13 +115,10 @@ void check_gas_impulse() {
       }
     }
   } else {
-    time_impulse = 0;
-
     // Idle
     if (allow_to_trigger == false) {
-      time_idle++;
 
-      if (time_idle > IMPULSE_DEBOUNCE) {
+      if (millis() - time_idle > IMPULSE_DEBOUNCE) {
         // Idle for debounce time
         allow_to_trigger = true;
       }
@@ -213,10 +209,23 @@ void post_gas_usage() {
   }
 }
 
+void interrupt_impulse_pin() {
+  uint8_t current_pin_state = digitalRead(IMPULSE_SENSOR_PIN);
+  if (current_pin_state != last_pin_state) {
+    if (current_pin_state == IMPULSE_SENSOR_ACTIVE_EDGE) {
+      time_impulse = millis();
+    } else {
+      time_idle = millis();
+    }
+  }
+  last_pin_state = current_pin_state;
+}
+
 // the setup function runs once when you press reset or power the board
 void setup() {
   // initialize digital pin LED_BUILTIN as an output.
   pinMode(LED_BUILTIN, OUTPUT);
+  attachInterrupt(digitalPinToInterrupt(IMPULSE_SENSOR_PIN), interrupt_impulse_pin, CHANGE);
 
   Serial.begin(115200);
   EEPROM.begin(512);
