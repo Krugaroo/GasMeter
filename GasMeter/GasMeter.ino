@@ -12,17 +12,17 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-#define IMPULSE_RESOLUTION 0.010f // 0.01 m3 per impulse
+#define IMPULSE_RESOLUTION 10 // 0.01 m3 per impulse
 #define IMPULSE_DEBOUNCE 250 // 0.25s before a pulse is released or allowed again
 
 #define IMPULSE_SENSOR_PIN 18
 #define IMPULSE_SENSOR_ACTIVE_EDGE LOW
 
 #define EEPROM_GAS_ADDRESS_START 0 // memory to save the gas usage 
-#define EEPROM_GAS_INITIAL_VALUE 26704.35f // Starting Value m3
+#define EEPROM_GAS_INITIAL_VALUE 26706980 // Starting Value m3
 
 #define EEPROM_RESET_ADDRESS_START 16 // memory to save the reset trigger 
-#define EEPROM_RESET_VALUE 6 // Change this to force a save and reset of the value, it will check what is stored 
+#define EEPROM_RESET_VALUE 0 // Change this to force a save and reset of the value, it will check what is stored 
 
 #define LED_ON_TIME (250) // ms
 #define SAVE_EEPROM_TIME (6 * 60 * 60 * 1000) // ms
@@ -40,7 +40,7 @@
 const char* ssid = "";
 const char* password = "";
 
-float gas_m3 = 0.000f;
+uint32_t gas_mm3 = 0;
 uint32_t reset_value = 0;
 bool gas_changed = false;
 
@@ -61,31 +61,35 @@ time_t time_now = 0;
 time_t time_last = 0;
 
 void save_gas_usage() {
-  EEPROM.put(EEPROM_GAS_ADDRESS_START, gas_m3);
+  EEPROM.put(EEPROM_GAS_ADDRESS_START, gas_mm3);
   EEPROM.put(EEPROM_RESET_ADDRESS_START, EEPROM_RESET_VALUE);
   EEPROM.commit();
   gas_changed = false;
 
   Serial.println("Saved to EEPROM: ");
-  Serial.print(gas_m3);
+  Serial.print(gas_mm3);
+  Serial.print(" ");
+  Serial.print(gas_mm3 / 1000.0f);
   Serial.println(" m3");
   Serial.print("Reset value: ");
-  Serial.println(reset_value);
+  Serial.println(EEPROM_RESET_VALUE);
 }
 
 void load_gas_usage() {
-  EEPROM.get(EEPROM_GAS_ADDRESS_START, gas_m3);
+  EEPROM.get(EEPROM_GAS_ADDRESS_START, gas_mm3);
   EEPROM.get(EEPROM_RESET_ADDRESS_START, reset_value);
   
   Serial.println("Loaded from EEPROM: ");
-  Serial.print(gas_m3);
+  Serial.print(gas_mm3);
+  Serial.print(" ");
+  Serial.print(gas_mm3 / 1000.0f);
   Serial.println(" m3");
   Serial.print("Reset value: ");
   Serial.println(reset_value);
 
-  if (gas_m3 < 1.0f || isnan(gas_m3) || reset_value != EEPROM_RESET_VALUE) {
+  if (gas_mm3 < 1000 || isnan(gas_mm3) || reset_value != EEPROM_RESET_VALUE) {
     Serial.println("First Run No Data in Eeprom or Reset Value mismatch");
-    gas_m3 = EEPROM_GAS_INITIAL_VALUE;
+    gas_mm3 = EEPROM_GAS_INITIAL_VALUE;
     save_gas_usage();
   }
 }
@@ -101,14 +105,16 @@ void check_gas_impulse() {
       if (millis() - time_impulse > IMPULSE_DEBOUNCE) {
         // Impulse seen for the debounce time
 
-        gas_m3 += IMPULSE_RESOLUTION;
+        gas_mm3 += IMPULSE_RESOLUTION;
         gas_changed = true;
 
         digitalWrite(LED_BUILTIN, HIGH);
         led_on_time = 0;
 
         Serial.print("Gas Usage: ");
-        Serial.print(gas_m3);
+        Serial.print(gas_mm3);
+        Serial.print(" ");
+        Serial.print(gas_mm3 / 1000.0f);
         Serial.println(" m3");
 
         allow_to_trigger = false;
@@ -169,12 +175,12 @@ void post_gas_usage() {
     Serial.println(time);
   }
 
-  if ((posted_today == false) && (tm.tm_hour == 2) && (tm.tm_year > 100)) {
-    // Try to post at 1 am
+  if ((posted_today == false) && (tm.tm_hour == 22) && (tm.tm_year > 100)) {
+    // Try to post at 22 pm
     if (post_retry_time >= POST_RETRY_TIME) {
       post_retry_time = 0;
 
-      snprintf(post_body, 99, "{\"date\": \"%04d-%02d-%02d\", \"reading\": %f}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, gas_m3);
+      snprintf(post_body, 99, "{\"date\": \"%04d-%02d-%02d\", \"reading\": %f}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, (gas_mm3 / 1000.0f));
       Serial.println("Sending HTTP Post Request");
       Serial.println(post_body);
 
@@ -193,7 +199,7 @@ void post_gas_usage() {
       Serial.println(httpResponseCode);
 
       // If post successful set posted to true
-      if (httpResponseCode == 200) {
+      if (httpResponseCode == 201) {
         posted_today = true;
       }
           
@@ -202,8 +208,8 @@ void post_gas_usage() {
     } else {
       post_retry_time++;
     }  
-  } else if (tm.tm_hour == 3) {
-    // Reset it at 3 am
+  } else if (tm.tm_hour == 23) {
+    // Reset it at 23:00
     posted_today = false;
     post_retry_time = POST_RETRY_TIME;
   }
@@ -242,7 +248,9 @@ void setup() {
   load_gas_usage();
 
   Serial.print("Initial Gas Usage: ");
-  Serial.print(gas_m3);
+  Serial.print(gas_mm3);
+  Serial.print(" ");
+  Serial.print(gas_mm3 / 1000.0f);
   Serial.println(" m3");
 }
 
